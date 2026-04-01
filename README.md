@@ -2,7 +2,16 @@
 
 Autonomous AI development toolkit for Claude Code. AgentSquad gives Claude Code a safe, completion-enforcing runtime for autonomous task execution -- structured task repositories, worker spawning, compliance enforcement, multi-agent teams, and cross-model collaboration. Battle-tested across 24 lessons from production use.
 
-## Quick Install
+## Quick Start (One Command)
+
+```bash
+cd your-project
+npx agentsquad start
+```
+
+This auto-detects your project type, installs AgentSquad, syncs GitHub issues, and starts the Conductor. Works with Node.js, Python, Go, and Rust projects.
+
+## Manual Install
 
 ```bash
 cd your-project

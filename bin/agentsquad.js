@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { execSync, spawnSync } = require('child_process');
+const { execSync, spawnSync, spawn } = require('child_process');
 
 const VERSION = require('../package.json').version;
 const AGENTSQUAD_ROOT = path.resolve(__dirname, '..');
@@ -424,6 +424,231 @@ function cmdDoctor() {
   }
 }
 
+// ── Start / Status / Stop ──────────────────────────────────
+
+function detectProject() {
+  const name = path.basename(CWD);
+  // Node.js
+  if (fs.existsSync(path.join(CWD, 'package.json'))) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(CWD, 'package.json'), 'utf8'));
+    return {
+      name: pkg.name || name,
+      build: pkg.scripts?.build ? 'npm run build' : 'echo "no build"',
+      test: pkg.scripts?.test ? 'npm test' : 'echo "no tests"',
+      lint: pkg.scripts?.lint ? 'npm run lint' : '',
+      description: pkg.description || '',
+    };
+  }
+  // Python
+  if (fs.existsSync(path.join(CWD, 'requirements.txt')) || fs.existsSync(path.join(CWD, 'pyproject.toml'))) {
+    return { name, build: 'python3 -m pytest', test: 'python3 -m pytest', lint: '', description: '' };
+  }
+  // Go
+  if (fs.existsSync(path.join(CWD, 'go.mod'))) {
+    return { name, build: 'go build ./...', test: 'go test ./...', lint: '', description: '' };
+  }
+  // Rust
+  if (fs.existsSync(path.join(CWD, 'Cargo.toml'))) {
+    return { name, build: 'cargo build', test: 'cargo test', lint: '', description: '' };
+  }
+  // Fallback
+  return { name, build: 'echo "no build"', test: 'echo "no tests"', lint: '', description: '' };
+}
+
+function loadEnvFile() {
+  const envPath = path.join(CWD, '.env.local');
+  if (!fs.existsSync(envPath)) return;
+  const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+  for (const line of lines) {
+    const match = line.match(/^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|SLACK_WEBHOOK_URL|AGENTSQUAD_\w+)=(.+)/);
+    if (match && !process.env[match[1]]) {
+      process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
+    }
+  }
+}
+
+function ensureGitHubLabels() {
+  if (!commandExists('gh')) return;
+  const labels = [
+    { name: 'squad:ready', color: '0E8A16', desc: 'Ready for AgentSquad' },
+    { name: 'squad:queued', color: 'FBCA04', desc: 'In queue' },
+    { name: 'squad:in-progress', color: '1D76DB', desc: 'Being processed' },
+    { name: 'squad:complete', color: '6F42C1', desc: 'Completed' },
+    { name: 'squad:failed', color: 'D93F0B', desc: 'Failed' },
+    { name: 'squad:triage', color: 'C5DEF5', desc: 'Needs triage' },
+  ];
+  for (const l of labels) {
+    try {
+      execSync(`gh label create "${l.name}" --color "${l.color}" --description "${l.desc}" --force`, { stdio: 'pipe', cwd: CWD });
+    } catch { /* ignore — maybe no repo access */ }
+  }
+  print('  GitHub labels ensured');
+}
+
+function syncGitHubIssues() {
+  if (!commandExists('gh')) return;
+  try {
+    const issuesJson = execSync('gh issue list --label "squad:ready" --state open --json number,title,body --limit 20', { cwd: CWD, encoding: 'utf8' });
+    const issues = JSON.parse(issuesJson);
+    const tasksDir = path.join(CWD, '.tasks');
+    let synced = 0;
+    for (const issue of issues) {
+      const taskDir = path.join(tasksDir, `issue-${issue.number}`);
+      if (fs.existsSync(path.join(taskDir, 'status.json'))) continue; // already exists
+      fs.mkdirSync(taskDir, { recursive: true });
+      // Parse dependencies from body
+      const deps = [];
+      const depMatches = (issue.body || '').matchAll(/depends[- ]?on:?\s*#(\d+)/gi);
+      for (const m of depMatches) deps.push(parseInt(m[1]));
+      // Detect complexity from body
+      let complexity = 'medium';
+      const compMatch = (issue.body || '').match(/\*\*Complexity:\s*(\w+)\*\*/i);
+      if (compMatch) complexity = compMatch[1].toLowerCase();
+      // Create status.json
+      const status = {
+        task_id: `issue-${issue.number}`,
+        kind: 'feature',
+        status: 'ready',
+        priority: 'P1',
+        complexity,
+        type: 'implement',
+        branch: '',
+        github_issue: issue.number,
+        title: issue.title,
+        pr_url: '',
+        attempts: 0,
+        max_iterations: 15,
+        dependencies: deps,
+        updated_at: new Date().toISOString(),
+      };
+      fs.writeFileSync(path.join(taskDir, 'status.json'), JSON.stringify(status, null, 2) + '\n');
+      fs.writeFileSync(path.join(taskDir, 'acceptance-criteria.md'), issue.body || '');
+      synced++;
+    }
+    if (synced > 0) print(`  Synced ${synced} GitHub issues to .tasks/`);
+    else print('  No new squad:ready issues to sync');
+  } catch (e) {
+    print('  Could not sync GitHub issues (gh CLI error)');
+  }
+}
+
+function startConductor() {
+  const conductorPath = path.join(CWD, 'scripts', 'agentsquad', 'conductor.sh');
+  if (!fs.existsSync(conductorPath)) {
+    printError('conductor.sh not found — run agentsquad init first');
+    process.exit(1);
+  }
+
+  // Check if already running
+  const lockDir = path.join(CWD, '.tasks', '.conductor.lock.d');
+  if (fs.existsSync(lockDir)) {
+    const pidFile = path.join(lockDir, 'pid');
+    if (fs.existsSync(pidFile)) {
+      const pid = fs.readFileSync(pidFile, 'utf8').trim();
+      try {
+        process.kill(parseInt(pid), 0); // check if alive
+        print(`  Conductor already running (PID ${pid})`);
+        return;
+      } catch { /* stale lock */ }
+    }
+  }
+
+  print('');
+  print('  Starting conductor...');
+  print('  To run in Claude Code: /loop 3m /conductor');
+  print('  To run standalone: bash scripts/agentsquad/conductor.sh --loop 3m');
+  print('');
+
+  // Start conductor in background
+  const conductor = spawn('bash', [conductorPath, '--loop', '3m'], {
+    cwd: CWD,
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, AGENTSQUAD_PROJECT_ROOT: CWD },
+  });
+  conductor.unref();
+
+  print(`  Conductor started (PID ${conductor.pid})`);
+  print('');
+  print('  Commands:');
+  print('    agentsquad status    — see what\'s happening');
+  print('    agentsquad stop      — stop the conductor');
+  print('');
+}
+
+async function cmdStart() {
+  print('');
+  print('  agentsquad start — plug-and-play autonomous development');
+  print('  ─────────────────────────────────────────────────────────');
+  print('');
+
+  // 1. Auto-detect project type if no agentsquad.json exists
+  if (!fs.existsSync(path.join(CWD, '.claude', 'agentsquad.json'))) {
+    print('  No agentsquad.json found — auto-detecting project...');
+    const detected = detectProject();
+    print(`  Detected: ${detected.name} (build: ${detected.build}, test: ${detected.test})`);
+    // Run init with detected values
+    process.env.AGENTSQUAD_PROJECT = detected.name;
+    process.env.AGENTSQUAD_BUILD_CMD = detected.build;
+    process.env.AGENTSQUAD_TEST_CMD = detected.test;
+    process.env.AGENTSQUAD_LINT_CMD = detected.lint;
+    process.env.AGENTSQUAD_MAIN_BRANCH = 'main';
+    process.argv.push('--yes'); // force non-interactive
+    await cmdInit();
+    // Install all packs
+    for (const pack of ['github', 'collab', 'notifications']) {
+      cmdAdd(pack);
+    }
+  } else {
+    print('  Found existing agentsquad.json — skipping init');
+  }
+
+  // 2. Load credentials from environment or .env.local
+  loadEnvFile();
+
+  // 3. Ensure GitHub labels (idempotent)
+  ensureGitHubLabels();
+
+  // 4. Sync squad:ready issues from GitHub → create .tasks/ dirs
+  syncGitHubIssues();
+
+  // 5. Start conductor
+  startConductor();
+}
+
+function cmdStatus() {
+  const conductorPath = path.join(CWD, 'scripts', 'agentsquad', 'conductor.sh');
+  if (fs.existsSync(conductorPath)) {
+    try {
+      const output = execSync(`bash "${conductorPath}" status`, { cwd: CWD, encoding: 'utf8', env: { ...process.env, AGENTSQUAD_PROJECT_ROOT: CWD } });
+      print(output);
+    } catch {
+      print('  No conductor status available');
+    }
+  } else {
+    print('  AgentSquad not initialized — run: agentsquad start');
+  }
+}
+
+function cmdStop() {
+  const lockDir = path.join(CWD, '.tasks', '.conductor.lock.d');
+  if (fs.existsSync(lockDir)) {
+    const pidFile = path.join(lockDir, 'pid');
+    if (fs.existsSync(pidFile)) {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+      try {
+        process.kill(pid, 'SIGTERM');
+        print(`  Conductor stopped (PID ${pid})`);
+      } catch {
+        print('  Conductor process not found (stale lock)');
+      }
+    }
+    try { fs.rmSync(lockDir, { recursive: true }); } catch {}
+  } else {
+    print('  No conductor running');
+  }
+}
+
 function cmdVersion() {
   print(`agentsquad v${VERSION}`);
 }
@@ -436,9 +661,12 @@ function cmdHelp() {
     agentsquad <command> [options]
 
   Commands:
-    init              Set up AgentSquad in the current project
+    start             Auto-detect, install, sync issues, and start the Conductor
+    init              Set up AgentSquad in the current project (interactive)
     add <pack>        Install an optional pack (collab, github, vercel, notifications, supabase)
     doctor            Check that all dependencies and config are in place
+    status            Show conductor and task queue status
+    stop              Stop the conductor
     version           Print version
     help              Show this help message
 
@@ -452,6 +680,9 @@ function cmdHelp() {
 
   Getting started:
     cd your-project
+    npx agentsquad start         # one command — auto-detects everything
+
+  Or step by step:
     npx agentsquad init
     agentsquad add collab        # optional: cross-model collaboration
     agentsquad add github        # optional: GitHub issue orchestration
@@ -465,6 +696,9 @@ function cmdHelp() {
 const [,, command, ...args] = process.argv;
 
 switch (command) {
+  case 'start':
+    cmdStart().catch(e => { printError(e.message); process.exit(1); });
+    break;
   case 'init':
     cmdInit().catch(e => { printError(e.message); process.exit(1); });
     break;
@@ -473,6 +707,12 @@ switch (command) {
     break;
   case 'doctor':
     cmdDoctor();
+    break;
+  case 'status':
+    cmdStatus();
+    break;
+  case 'stop':
+    cmdStop();
     break;
   case 'version':
   case '--version':

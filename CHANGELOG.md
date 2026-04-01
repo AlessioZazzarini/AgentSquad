@@ -2,6 +2,23 @@
 
 All notable changes to AgentSquad are documented here. This changelog also serves as a design journal — recording not just what changed, but why, what alternatives were considered, and what was learned.
 
+## [0.5.0] — 2026-04-01 — Plug-and-Play Start
+
+### What's new
+One command to rule them all: `npx agentsquad start`
+- Auto-detects project type (Node/Python/Go/Rust)
+- Auto-installs all packs if needed
+- Loads credentials from .env.local
+- Creates GitHub labels idempotently
+- Syncs squad:ready issues from GitHub
+- Starts the Conductor in background
+- `agentsquad status` and `agentsquad stop` for control
+
+### Designed with Codex
+Key insight: CLI bootstraps itself — slash commands can't exist before installation. agentsquad start is the real product. /squad is sugar for later.
+
+---
+
 ## [0.4.0] — 2026-04-01 — Unified Conductor
 
 ### What's new
