@@ -130,19 +130,27 @@ check_deps_met() {
   return 0
 }
 
-# ── Tick locking (flock) ─────────────────────────────────────
+# ── Tick locking (cross-platform: mkdir is atomic on all POSIX systems) ──
+LOCK_DIR="${LOCK_FILE}.d"
+
 acquire_tick_lock() {
-  mkdir -p "$(dirname "$LOCK_FILE")"
-  exec 200>"$LOCK_FILE"
-  if ! flock -n 200; then
-    echo "Another conductor tick is running. Skipping." >&2
-    exit 0
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    # Check if the lock holder is still alive (stale lock detection)
+    local lock_pid=""
+    [ -f "$LOCK_DIR/pid" ] && lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+      echo "Another conductor tick is running (PID $lock_pid). Skipping." >&2
+      exit 0
+    fi
+    # Stale lock — previous run crashed. Clean up and retry.
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || { echo "Failed to acquire lock" >&2; exit 1; }
   fi
+  echo $$ > "$LOCK_DIR/pid"
 }
 
 release_tick_lock() {
-  flock -u 200 2>/dev/null || true
-  rm -f "$LOCK_FILE"
+  rm -rf "$LOCK_DIR" 2>/dev/null || true
 }
 
 # ── Approval helpers ─────────────────────────────────────────
@@ -585,9 +593,9 @@ cmd_health() {
     local status
     status=$(jq -r '.status // "unknown"' "$status_file")
 
-    # Only check active statuses
+    # Only check active statuses — skip completed/finalized/ready-for-review
     case "$status" in
-      in_progress|implementing|testing-local|investigating) ;;
+      in_progress|implementing|testing-local|investigating|spawned) ;;
       *) continue ;;
     esac
 
