@@ -54,7 +54,7 @@ Add more permissions as needed for your project.
 
 ## Hooks
 
-AgentSquad uses the Ralph Loop Framework's hook system. The key hook is the **stop hook**, which injects the 7-point compliance checklist every iteration.
+AgentSquad uses a hook-based compliance system. The key hook is the **stop hook**, which injects the 7-point compliance checklist every iteration.
 
 To enable the loop, set `AGENTSQUAD_LOOP_ENABLED=1` before launching Claude Code. The recommended alias:
 

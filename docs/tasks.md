@@ -48,8 +48,8 @@ Tasks live in `.tasks/` (configurable via `AGENTSQUAD_TASKS_DIR`).
 | `implementing` | Worker is writing code |
 | `testing-local` | Worker is running build and tests |
 | `testing-preview` | Worker is testing on a preview deployment |
-| `pr-created` | PR has been created |
-| `ready-for-review` | All tests pass, PR ready for human review |
+| `ready-for-review` | Worker is done: code written, tests pass. Orchestrator handles push + PR. |
+| `pr-created` | Orchestrator has pushed branch and created PR |
 | `blocked` | Worker hit a blocker and stopped |
 
 ### Updating Status
@@ -69,8 +69,11 @@ Never edit `status.json` directly. The script handles:
 ## Task Lifecycle
 
 ```
-ready → investigating → implementing → testing-local → pr-created → ready-for-review
+ready → investigating → implementing → testing-local → ready-for-review → pr-created
                                     ↘ blocked (max attempts or unresolvable issue)
+
+Note: The worker stops at `ready-for-review`. The orchestrator (or human) then
+pushes the branch, creates the PR, and sets `pr-created`.
 ```
 
 1. **Create** task files (manually or via orchestration)

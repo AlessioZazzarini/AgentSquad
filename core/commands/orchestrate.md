@@ -41,7 +41,7 @@ This command has been refactored to avoid **context rot** and **context overflow
 +---------------------------------------------------------+
 |  For each issue in priority order:                       |
 |  +- Check dependencies met (read manifest)               |
-|  +- Create feature branch: squad/issue-<N>               |
+|  +- Create feature branch: task/issue-<N>               |
 |  +- claude -p "/taskify <N>"  <- Fresh Claude Session    |
 |  +- .tasks/loop.sh 20         <- Fresh Claude Sessions   |
 |  +- Commit, push, create PR (gh CLI)                     |
@@ -412,7 +412,7 @@ process_issue() {
     git pull origin main || { log "${RED}x Failed to pull main${NC}"; return 1; }
 
     # Create feature branch
-    local branch_name="squad/issue-$issue"
+    local branch_name="task/issue-$issue"
     log "Creating feature branch: $branch_name"
     git checkout -b "$branch_name" || {
         # Branch might already exist from a previous failed run
@@ -887,5 +887,5 @@ To retry failed issues:
 | `.tasks/squad-orchestrate.sh` | Generated orchestration script |
 | `.tasks/orchestration.log` | Execution log (created by script) |
 | `.tasks/archive/issue-N/` | Archived session files |
-| `squad/issue-N` branches | Feature branches per issue |
+| `task/issue-N` branches | Feature branches per issue |
 | PRs | Pull requests per issue |

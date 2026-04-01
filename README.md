@@ -59,9 +59,9 @@ The loop framework injects a **7-point anti-premature-stopping checklist** every
 4. Has status been updated via the script?
 5. Are there no unresolved blockers?
 6. Has the completion promise been fulfilled?
-7. Has the PR been created (if applicable)?
+7. Is there any remaining work you haven't attempted?
 
-Workers cannot stop until all 7 points are satisfied.
+Workers cannot stop until all 7 points are satisfied. Push and PR creation happen after worker completion (handled by the orchestrator).
 
 ### Multi-Agent Teams
 
