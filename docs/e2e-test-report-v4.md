@@ -151,3 +151,24 @@ Config: `approval.default: "auto"`, `sensitive_paths: ["auth", "security", ...]`
 - Verify /collab is actually invoked (not just referenced)
 - Auto-load notification credentials
 - Configurable merge method
+
+---
+
+## Addendum: Manual Approval + Merge Confirmed
+
+After the initial report, issue #11 was manually approved:
+```bash
+bash scripts/agentsquad/update-status.sh issue-11 status approved
+```
+
+The next Conductor cycle detected `approved` status and merged PR #13 automatically.
+
+**Final state:**
+- PR #12 (CORS): **MERGED** — auto-approved, auto-merged
+- PR #13 (Auth): **MERGED** — manual approval required (sensitive paths), then auto-merged
+
+Both modes of the dual approval gate are fully validated:
+1. **Auto path**: simple task → auto-approve → auto-merge (zero human touch)
+2. **Manual path**: auth task → held → human approves → Conductor merges
+
+The sensitive path detection correctly identified "auth" in the changed files and overrode the global auto setting. This is the safety net working as designed.
