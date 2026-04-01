@@ -177,8 +177,8 @@ bash scripts/agentsquad/update-status.sh ${TASK_ID} status "investigating"
 - Write hypotheses to execution-log.md
 
 ### Step 4: Implement
+You are already on branch \`task/${TASK_ID}\` (created by the worktree). Just verify with \`git branch --show-current\`.
 \`\`\`bash
-git checkout -b task/${TASK_ID}
 bash scripts/agentsquad/update-status.sh ${TASK_ID} status "implementing"
 bash scripts/agentsquad/update-status.sh ${TASK_ID} branch "task/${TASK_ID}"
 \`\`\`
