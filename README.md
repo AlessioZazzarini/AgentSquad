@@ -75,7 +75,22 @@ The Conductor watches your task queue and autonomously manages workers:
 /loop 5m /conductor
 ```
 
-Each cycle: finalizes completed workers (push + PR), checks health (nudge/kill stuck), spawns new workers (up to MAX_WORKERS). See [docs/conductor.md](docs/conductor.md).
+Each cycle: finalizes completed workers (push + PR), checks review artifacts, applies approval policy, merges approved tasks, checks health (nudge/kill stuck), spawns new workers (up to MAX_WORKERS). See [docs/conductor.md](docs/conductor.md).
+
+### Approval Modes
+
+| Mode | Who approves | When to use |
+|------|-------------|-------------|
+| `manual` (default) | Human reviews PR, then runs `update-status.sh <id> status approved` | Production repos, security-sensitive work |
+| `auto` | Conductor auto-approves after CI green + policy check | Trusted repos, low-risk tasks |
+| `paused` | Nobody — all merges halted | Emergencies, code freezes |
+
+Configure in `.claude/agentsquad.json`:
+```json
+{ "approval": { "default": "manual" } }
+```
+
+Per-task override via `approval_mode` field in status.json. Sensitive paths (configured in `approval.auto_merge.sensitive_paths`) force manual review regardless of mode.
 
 ### Multi-Agent Teams
 

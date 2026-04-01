@@ -50,6 +50,9 @@ Tasks live in `.tasks/` (configurable via `AGENTSQUAD_TASKS_DIR`).
 | `testing-preview` | Worker is testing on a preview deployment |
 | `ready-for-review` | Worker is done: code written, tests pass. Orchestrator handles push + PR. |
 | `pr-created` | Orchestrator has pushed branch and created PR |
+| `review-ready` | PR exists + pr-review.md written. Awaiting approval. |
+| `approved` | Human (manual) or system (auto) approved. Ready to merge. |
+| `merged` | PR merged to main. Task archived. |
 | `blocked` | Worker hit a blocker and stopped |
 
 ### Updating Status
@@ -69,11 +72,17 @@ Never edit `status.json` directly. The script handles:
 ## Task Lifecycle
 
 ```
-ready → investigating → implementing → testing-local → ready-for-review → pr-created
-                                    ↘ blocked (max attempts or unresolvable issue)
+ready → investigating → implementing → testing-local → ready-for-review
+  → pr-created → review-ready → approved → merged
+                             ↘ blocked (max attempts or unresolvable issue)
+
+Manual mode: human sets "approved" via update-status.sh
+Auto mode: conductor sets "approved" after CI green + policy check
+Paused mode: nothing merges (global kill switch)
 
 Note: The worker stops at `ready-for-review`. The orchestrator (or human) then
-pushes the branch, creates the PR, and sets `pr-created`.
+pushes the branch, creates the PR, and sets `pr-created`. The conductor checks
+for pr-review.md to promote to `review-ready`, then applies the approval policy.
 ```
 
 1. **Create** task files (manually or via orchestration)

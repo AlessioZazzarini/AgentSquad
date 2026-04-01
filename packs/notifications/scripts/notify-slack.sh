@@ -1,14 +1,26 @@
 #!/bin/bash
+# notify-slack.sh — Send notification via Slack Incoming Webhook
 # Usage: notify-slack.sh "Your message here"
-#
-# Sends a Slack notification via incoming webhook.
-#
-# Requirements:
-#   - AgentSquad_SLACK_WEBHOOK env var set to your Slack incoming webhook URL
-#
-# Example:
-#   bash scripts/agentsquad/notify-slack.sh "Build passed for task/migrate-auth"
+# Env: SLACK_WEBHOOK_URL
+# Falls back to stdout if env var not set.
 
-echo "STUB: notify-slack.sh — not yet implemented"
-echo "Install the notifications pack and configure AgentSquad_SLACK_WEBHOOK."
-exit 1
+set -euo pipefail
+
+MESSAGE="${1:-}"
+if [ -z "$MESSAGE" ]; then
+  echo "Usage: notify-slack.sh 'message'" >&2
+  exit 1
+fi
+
+WEBHOOK="${SLACK_WEBHOOK_URL:-}"
+
+if [ -z "$WEBHOOK" ]; then
+  echo "[slack] $MESSAGE"
+  exit 0
+fi
+
+curl -sf -X POST "$WEBHOOK" \
+  -H "Content-Type: application/json" \
+  -d "{\"text\": \"$MESSAGE\"}" >/dev/null 2>&1 || {
+  echo "[slack] Failed to send, falling back to stdout: $MESSAGE" >&2
+}

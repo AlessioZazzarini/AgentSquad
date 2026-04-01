@@ -2,6 +2,23 @@
 
 All notable changes to AgentSquad are documented here. This changelog also serves as a design journal — recording not just what changed, but why, what alternatives were considered, and what was learned.
 
+## [0.3.0] — 2026-04-01 — Notifications + Dual-Mode Approval
+
+### What's new
+- Real Telegram notifications (was stub)
+- Real Slack notifications (was stub)
+- Auto-detect notification channel from config
+- Dual-mode approval: manual (human gate) vs auto (CI + policy)
+- New status states: review-ready, approved, merged
+- pr-review.md required before completion
+- Cycle summary notifications
+- Global kill switch ("paused" mode)
+
+### Designed with Codex (gpt-5.4)
+Codex key insight: same state machine for both modes. Only difference is who advances review-ready -> approved. Sensitive paths force manual regardless of setting.
+
+---
+
 ## [0.2.0] — 2026-04-01 — Conductor (Continuous Orchestrator)
 
 ### What's new
