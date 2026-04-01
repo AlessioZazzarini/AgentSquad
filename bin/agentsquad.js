@@ -6,7 +6,7 @@ const readline = require('readline');
 const { execSync, spawnSync } = require('child_process');
 
 const VERSION = require('../package.json').version;
-const AgentSquad_ROOT = path.resolve(__dirname, '..');
+const AGENTSQUAD_ROOT = path.resolve(__dirname, '..');
 const CWD = process.cwd();
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -70,20 +70,37 @@ async function cmdInit() {
   print('  ─────────────────────────────────────────────────────────');
   print('');
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  // Support non-interactive mode via env vars or --yes flag
+  const nonInteractive = process.argv.includes('--yes') || process.argv.includes('-y') || !process.stdin.isTTY;
 
-  const projectName = await ask(rl, 'Project name', path.basename(CWD));
-  const description = await ask(rl, 'Description', '');
-  const buildCmd = await ask(rl, 'Build command', 'npm run build');
-  const testCmd = await ask(rl, 'Test command', 'npm test');
-  const e2eCmd = await ask(rl, 'E2E test command', 'npx playwright test');
-  const lintCmd = await ask(rl, 'Lint command', 'npm run lint');
-  const mainBranch = await ask(rl, 'Main branch', 'main');
+  let projectName, description, buildCmd, testCmd, e2eCmd, lintCmd, mainBranch;
 
-  rl.close();
+  if (nonInteractive) {
+    projectName = process.env.AGENTSQUAD_PROJECT || path.basename(CWD);
+    description = process.env.AGENTSQUAD_DESCRIPTION || '';
+    buildCmd = process.env.AGENTSQUAD_BUILD_CMD || 'npm run build';
+    testCmd = process.env.AGENTSQUAD_TEST_CMD || 'npm test';
+    e2eCmd = process.env.AGENTSQUAD_E2E_CMD || 'npx playwright test';
+    lintCmd = process.env.AGENTSQUAD_LINT_CMD || 'npm run lint';
+    mainBranch = process.env.AGENTSQUAD_MAIN_BRANCH || 'main';
+    print(`  Non-interactive mode (--yes or piped stdin)`);
+    print(`  Project: ${projectName}, Build: ${buildCmd}, Test: ${testCmd}`);
+  } else {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    projectName = await ask(rl, 'Project name', path.basename(CWD));
+    description = await ask(rl, 'Description', '');
+    buildCmd = await ask(rl, 'Build command', 'npm run build');
+    testCmd = await ask(rl, 'Test command', 'npm test');
+    e2eCmd = await ask(rl, 'E2E test command', 'npx playwright test');
+    lintCmd = await ask(rl, 'Lint command', 'npm run lint');
+    mainBranch = await ask(rl, 'Main branch', 'main');
+
+    rl.close();
+  }
 
   print('');
   print('Setting up AgentSquad...');
@@ -143,7 +160,66 @@ async function cmdInit() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   print('  Updated .claude/settings.json with AgentSquad permissions');
 
-  // 5. Create project config
+  // 5. Copy hooks to .claude/hooks/
+  const hooksDir = path.join(claudeDir, 'hooks');
+  copyDir(path.join(AGENTSQUAD_ROOT, 'core', 'hooks'), hooksDir);
+  if (fs.existsSync(hooksDir)) {
+    for (const f of fs.readdirSync(hooksDir)) {
+      if (f.endsWith('.sh')) makeExecutable(path.join(hooksDir, f));
+    }
+  }
+  print('  Copied hooks to .claude/hooks/');
+
+  // 6. Copy templates to .claude/templates/
+  copyDir(path.join(AGENTSQUAD_ROOT, 'core', 'templates'), path.join(claudeDir, 'templates'));
+  print('  Copied templates to .claude/templates/');
+
+  // 7. Copy commands to .claude/commands/
+  copyDir(path.join(AGENTSQUAD_ROOT, 'core', 'commands'), path.join(claudeDir, 'commands'));
+  print('  Copied commands to .claude/commands/');
+
+  // 8. Copy skills to .claude/skills/
+  copyDir(path.join(AGENTSQUAD_ROOT, 'core', 'skills'), path.join(claudeDir, 'skills'));
+  print('  Copied skills to .claude/skills/');
+
+  // 9. Copy agents to .claude/agents/
+  copyDir(path.join(AGENTSQUAD_ROOT, 'core', 'agents'), path.join(claudeDir, 'agents'));
+  print('  Copied agents to .claude/agents/');
+
+  // 10. Copy task repo templates
+  copyDir(path.join(AGENTSQUAD_ROOT, 'core', 'tasks'), path.join(CWD, '.tasks'));
+  print('  Copied task repository templates');
+
+  // 11. Merge hooks config from settings-fragment.json
+  const fragmentPath = path.join(AGENTSQUAD_ROOT, 'core', 'settings-fragment.json');
+  if (fs.existsSync(fragmentPath)) {
+    const fragment = JSON.parse(fs.readFileSync(fragmentPath, 'utf8'));
+    // Merge env
+    if (fragment.env) {
+      if (!settings.env) settings.env = {};
+      Object.assign(settings.env, fragment.env);
+    }
+    // Merge hooks
+    if (fragment.hooks) {
+      if (!settings.hooks) settings.hooks = {};
+      for (const [hookType, hookEntries] of Object.entries(fragment.hooks)) {
+        if (!settings.hooks[hookType]) settings.hooks[hookType] = [];
+        for (const entry of hookEntries) {
+          // Avoid duplicates by checking command
+          const existing = settings.hooks[hookType].some(e =>
+            e.hooks && e.hooks.some(h => entry.hooks && entry.hooks.some(eh => eh.command === h.command))
+          );
+          if (!existing) {
+            settings.hooks[hookType].push(entry);
+          }
+        }
+      }
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    print('  Merged hooks configuration into .claude/settings.json');
+  }
+
+  // 12. Create project config
   const configPath = path.join(claudeDir, 'agentsquad.json');
   const config = {
     project: projectName,
