@@ -1,0 +1,14 @@
+{
+  "name": "agentsquad",
+  "version": "0.1.0",
+  "description": "Autonomous AI development toolkit for Claude Code — safe, completion-enforcing dev runtime",
+  "bin": {
+    "agentsquad": "./bin/agentsquad.js"
+  },
+  "keywords": ["claude-code", "autonomous", "ai", "development", "toolkit"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": ["bin/", "core/", "packs/", "docs/", "examples/", "README.md", "LICENSE"]
+}

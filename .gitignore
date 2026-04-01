@@ -1,0 +1,15 @@
+# AgentSquad local state
+.claude/loop.local.md
+.tasks/worktrees/
+.tasks/sessions/
+.tasks/orchestration.lock
+.tasks/orchestration.pid
+.tasks/orchestration.log
+.tasks/orchestration-manifest.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
