@@ -17,6 +17,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 if [ -f "$SCRIPT_DIR/lib/config.sh" ]; then
   source "$SCRIPT_DIR/lib/config.sh"
 fi
+if [ -f "$SCRIPT_DIR/lib/worktree.sh" ]; then
+  source "$SCRIPT_DIR/lib/worktree.sh"
+fi
 
 TASKS_DIR="${AGENTSQUAD_TASKS_DIR:-.tasks}"
 MAX_WORKERS="${AGENTSQUAD_MAX_WORKERS:-3}"
@@ -145,10 +148,14 @@ cmd_finalize() {
     }
   fi
 
-  # Update status
-  bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "pr-created"
-  if [ -n "$pr_url" ]; then
+  # Only set pr-created if we have a valid PR URL
+  if echo "$pr_url" | grep -q "github.com"; then
+    bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "pr-created"
     bash "$SCRIPT_DIR/update-status.sh" "$task_id" pr_url "$pr_url"
+  else
+    echo "ERROR: No valid PR URL obtained for $task_id (got: ${pr_url:-empty})" >&2
+    # Leave status at ready-for-review — do not promote to pr-created
+    return 1
   fi
 
   # Update GitHub labels
@@ -187,6 +194,16 @@ cmd_finalize_all() {
     echo "No tasks with status 'ready-for-review' to finalize."
   else
     echo "Finalized $found task(s)."
+    # Clean up any remaining worktrees after finalization
+    if [ -d "$PROJECT_ROOT/$TASKS_DIR/worktrees" ]; then
+      for wt_dir in "$PROJECT_ROOT/$TASKS_DIR/worktrees"/*/; do
+        [ -d "$wt_dir" ] || continue
+        local wt_task_id
+        wt_task_id=$(basename "$wt_dir")
+        (cd "$PROJECT_ROOT" && cleanup_worktree "$wt_task_id") 2>/dev/null || true
+      done
+      rmdir "$PROJECT_ROOT/$TASKS_DIR/worktrees" 2>/dev/null || true
+    fi
   fi
 }
 
@@ -247,7 +264,7 @@ cmd_spawn_next() {
     return 0
   fi
 
-  # Find next ready task (with dependency check)
+  # Find next ready task (with strengthened dependency check)
   for status_file in "$PROJECT_ROOT/$TASKS_DIR"/*/status.json; do
     [ -f "$status_file" ] || continue
     local status
@@ -257,29 +274,53 @@ cmd_spawn_next() {
     local task_id
     task_id=$(basename "$(dirname "$status_file")")
 
-    # Check dependencies are met
+    # Strengthened dependency check with cascade blocking
     local deps_met=true
+    local should_block=false
     local deps
     deps=$(jq -r '.dependencies // [] | .[]' "$status_file" 2>/dev/null || true)
     for dep in $deps; do
       [ -z "$dep" ] && continue
       local dep_file="$PROJECT_ROOT/$TASKS_DIR/$dep/status.json"
-      if [ -f "$dep_file" ]; then
-        local dep_status
-        dep_status=$(jq -r '.status // "unknown"' "$dep_file")
-        if [ "$dep_status" != "pr-created" ] && [ "$dep_status" != "complete" ] && [ "$dep_status" != "ready-for-review" ]; then
-          deps_met=false
-          break
-        fi
+      if [ ! -f "$dep_file" ]; then
+        # Dep status.json doesn't exist — dep NOT met
+        deps_met=false
+        break
+      fi
+      local dep_status
+      dep_status=$(jq -r '.status // "unknown"' "$dep_file")
+      if [ "$dep_status" = "blocked" ] || [ "$dep_status" = "failed" ]; then
+        # Cascade: mark this task as blocked
+        should_block=true
+        deps_met=false
+        break
+      fi
+      if [ "$dep_status" != "pr-created" ] && [ "$dep_status" != "complete" ]; then
+        deps_met=false
+        break
       fi
     done
+
+    if [ "$should_block" = true ]; then
+      echo "Blocking $task_id (dependency blocked/failed)"
+      bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "blocked" 2>/dev/null || true
+      continue
+    fi
 
     if [ "$deps_met" = false ]; then
       continue
     fi
 
-    echo "Spawning: $task_id"
-    bash "$SCRIPT_DIR/spawn-worker.sh" "$task_id"
+    # Create worktree before spawning
+    local branch="task/$task_id"
+    local wt_path
+    wt_path=$(cd "$PROJECT_ROOT" && create_worktree "$task_id" "$branch") || {
+      echo "ERROR: Failed to create worktree for $task_id" >&2
+      continue
+    }
+
+    echo "Spawning: $task_id (worktree: $wt_path)"
+    AGENTSQUAD_WORKDIR="$PROJECT_ROOT/$wt_path" bash "$SCRIPT_DIR/spawn-worker.sh" "$task_id"
     return 0
   done
 
