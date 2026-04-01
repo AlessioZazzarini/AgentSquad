@@ -74,6 +74,21 @@ if echo "$CMD_LOWER" | grep -qE 'git\s+clean\s+.*-fd'; then
     log_blocked "git clean -fd removes untracked files/directories irreversibly"
 fi
 
+# git restore --source (can overwrite working tree with arbitrary content)
+if echo "$CMD_LOWER" | grep -qE 'git\s+restore\s+--source'; then
+    log_blocked "git restore --source can overwrite working tree files"
+fi
+
+# git checkout -- . (discard all uncommitted changes in current directory)
+if echo "$CMD_LOWER" | grep -qE 'git\s+checkout\s+--\s+\.'; then
+    log_blocked "git checkout -- . discards all uncommitted changes"
+fi
+
+# rm -rf . (delete everything in current directory)
+if echo "$CMD_LOWER" | grep -qE 'rm\s+(-rf|-fr)\s+\.(\s|$)'; then
+    log_blocked "rm -rf . would delete everything in the current directory"
+fi
+
 # ============================================================
 # FILE SYSTEM DESTRUCTION PATTERNS
 # ============================================================

@@ -32,6 +32,16 @@ if [ ! -f "$STATUS_FILE" ]; then
   exit 1
 fi
 
+# Acquire file-level lock to prevent concurrent read-modify-write corruption
+LOCK_DIR="${STATUS_FILE}.lock.d"
+cleanup_lock() { rm -rf "$LOCK_DIR" 2>/dev/null; }
+trap cleanup_lock EXIT
+# Acquire lock with retry
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  sleep 0.2
+  mkdir "$LOCK_DIR" 2>/dev/null || true  # proceed anyway if still locked
+fi
+
 # Determine if value is numeric, boolean, or string
 if [[ "$VALUE" =~ ^[0-9]+$ ]]; then
   jq --arg f "$FIELD" --argjson v "$VALUE" '.[$f] = $v | .updated_at = (now | todate)' \
@@ -43,6 +53,9 @@ else
   jq --arg f "$FIELD" --arg v "$VALUE" '.[$f] = $v | .updated_at = (now | todate)' \
     "$STATUS_FILE" > "${STATUS_FILE}.tmp.$$" && mv "${STATUS_FILE}.tmp.$$" "$STATUS_FILE"
 fi
+
+cleanup_lock
+trap - EXIT
 
 echo "Updated ${TASK_ID}: ${FIELD} = ${VALUE}"
 

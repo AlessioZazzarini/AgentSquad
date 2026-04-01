@@ -550,15 +550,18 @@ cmd_merge_approved() {
     fi
 
     if [ -n "$close_script" ]; then
-      # Set status to "merged" BEFORE close-task.sh, which archives/deletes the task dir
-      bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "merged"
+      # Set status to "merging" before close-task.sh runs
+      bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "merging"
       if (cd "$PROJECT_ROOT" && bash "$close_script" "$task_id" 2>&1); then
+        # Try to set "merged" — may fail if close-task.sh already archived the task dir (that's OK)
+        bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "merged" 2>/dev/null || true
         bash "$SCRIPT_DIR/notify.sh" "$(printf '\xE2\x9C\x85') *${task_id}* merged (PR #${pr_number:-?})" 2>/dev/null || true
         echo "Merged: $task_id (PR #${pr_number:-?})"
         found=$((found + 1))
       else
-        echo "WARNING: close-task.sh failed for $task_id but status already set to merged" >&2
-        found=$((found + 1))
+        # Revert to approved so the task can be retried
+        bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "approved"
+        echo "WARNING: close-task.sh failed for $task_id — reverted to approved" >&2
       fi
     else
       # No close-task.sh — try direct merge via gh
@@ -594,7 +597,7 @@ cmd_health() {
 
     # Only check active statuses — skip completed/finalized/ready-for-review
     case "$status" in
-      in_progress|implementing|testing-local|investigating|spawned) ;;
+      in_progress|implementing|testing-local|investigating) ;;
       *) continue ;;
     esac
 
@@ -861,9 +864,9 @@ fi
 # Handle run modes
 case "$MODE" in
   once)
-    acquire_tick_lock
+    if [ "$DRY_RUN" = false ]; then acquire_tick_lock; fi
     run_tick
-    release_tick_lock
+    if [ "$DRY_RUN" = false ]; then release_tick_lock; fi
     ;;
   loop)
     run_loop

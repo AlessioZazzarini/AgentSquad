@@ -13,9 +13,13 @@ set -euo pipefail
 
 MESSAGE="${1:?Usage: notify.sh \"message\"}"
 
+# --- Resolve project root ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${AGENTSQUAD_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+
 # --- Resolve channel from config ---
 CHANNEL="none"
-CONFIG_FILE=".claude/agentsquad.json"
+CONFIG_FILE="$PROJECT_ROOT/.claude/agentsquad.json"
 
 if [ -f "$CONFIG_FILE" ]; then
   # Extract notifications.channel — lightweight jq-free parsing
@@ -29,13 +33,13 @@ fi
 find_script() {
   local name="$1"
   # Installed location (pack install copies to scripts/agentsquad/)
-  if [ -f "scripts/agentsquad/${name}" ]; then
-    echo "scripts/agentsquad/${name}"
+  if [ -f "$PROJECT_ROOT/scripts/agentsquad/${name}" ]; then
+    echo "$PROJECT_ROOT/scripts/agentsquad/${name}"
     return
   fi
   # Pack source location
-  if [ -f "packs/notifications/scripts/${name}" ]; then
-    echo "packs/notifications/scripts/${name}"
+  if [ -f "$PROJECT_ROOT/packs/notifications/scripts/${name}" ]; then
+    echo "$PROJECT_ROOT/packs/notifications/scripts/${name}"
     return
   fi
   echo ""
@@ -78,9 +82,10 @@ case "$CHANNEL" in
       exit 0
     fi
     # Generic webhook — works with Slack, Discord, and most services
-    curl -s -X POST "${AGENTSQUAD_NOTIFY_WEBHOOK}" \
+    PAYLOAD=$(jq -n --arg text "$MESSAGE" '{"text": $text, "content": $text}')
+    curl -sf -X POST "${AGENTSQUAD_NOTIFY_WEBHOOK}" \
       -H "Content-Type: application/json" \
-      -d "{\"text\": \"${MESSAGE}\", \"content\": \"${MESSAGE}\"}" \
+      -d "$PAYLOAD" \
       > /dev/null 2>&1 || echo "WARNING: webhook notification failed" >&2
     echo "[agentsquad] ${MESSAGE}"
     ;;

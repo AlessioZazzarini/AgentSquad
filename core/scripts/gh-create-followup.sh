@@ -30,14 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${AGENTSQUAD_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 cd "$PROJECT_ROOT"
 
-# Duplicate check — search for similar open issues
-SEARCH_TERM=$(echo "$TITLE" | head -c 60)  # Truncate for search
-EXISTING=$(gh issue list --search "$SEARCH_TERM" --state open --json number --jq 'length' 2>/dev/null || echo 0)
-
-if [ "$EXISTING" -gt 0 ]; then
-  echo "[gh-followup] Similar issue already exists for: $TITLE — skipping" >&2
-  exit 0
-fi
+# Duplicates are better than lost defects — let humans triage.
 
 # Build the issue body with parent context
 FULL_BODY="Discovered while implementing #${PARENT:-unknown}.

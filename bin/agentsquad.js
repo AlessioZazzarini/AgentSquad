@@ -134,6 +134,9 @@ async function cmdInit() {
     try {
       settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     } catch {
+      const backup = settingsPath + '.backup.' + Date.now();
+      fs.copyFileSync(settingsPath, backup);
+      print(`  WARNING: ${settingsPath} invalid JSON — backed up to ${backup}`);
       settings = {};
     }
   }

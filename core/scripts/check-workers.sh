@@ -5,11 +5,9 @@
 
 set -euo pipefail
 
-SESSION="${AGENTSQUAD_TMUX_SESSION:-$(basename "$(pwd)")}"
-
-# Resolve project root and tasks dir
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="${AGENTSQUAD_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+SESSION="${AGENTSQUAD_TMUX_SESSION:-$(basename "$PROJECT_ROOT")}"
 TASKS_DIR="${AGENTSQUAD_TASKS_DIR:-.tasks}"
 
 if ! tmux has-session -t "$SESSION" 2>/dev/null; then

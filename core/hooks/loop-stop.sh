@@ -114,7 +114,7 @@ fi
 # (Briefly disable errexit so a jq failure can be caught by the $? check.)
 set +e
 LAST_OUTPUT=$(echo "$LAST_LINES" | jq -rs '
-  map(.message.content[]? | select(.type == "text") | .text) | last // ""
+  map(.message.content[]? | select(.type == "text") | .text) | .[-5:] | join("\n") // ""
 ' 2>&1)
 JQ_EXIT=$?
 set -e
