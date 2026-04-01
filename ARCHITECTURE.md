@@ -7,28 +7,27 @@ How AgentSquad works, why it's built this way, and how the pieces connect.
 ```
 User creates GitHub issues with acceptance criteria
         ↓
-/orchestrate triages issues, builds dependency graph, generates manifest
+/orchestrate triages issues → creates .tasks/<id>/ dirs
         ↓
-orchestrate-parallel.sh processes issues in waves
+conductor.sh runs one idempotent tick (--once, --loop, --dry-run)
         ↓
-    ┌─── Wave 1: Independent issues ──────────────────────┐
-    │                                                       │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-    │  │ git worktree │  │ git worktree │  │ git worktree │  │
-    │  │   issue-1    │  │   issue-4    │  │   issue-7    │  │
-    │  │  (tmux win)  │  │  (tmux win)  │  │  (tmux win)  │  │
-    │  │  Claude Code │  │  Claude Code │  │  Claude Code │  │
-    │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
-    │         ↓                 ↓                 ↓          │
-    │    code + tests      code + tests      code + tests    │
-    └────────────────────────────────────────────────────────┘
-        ↓ all complete
-    ┌─── Wave 2: Dependent issues ────────────────────────┐
-    │  (dependency branches merged into worktrees)          │
-    │  ...                                                  │
-    └────────────────────────────────────────────────────────┘
-        ↓ all complete
-Orchestrator pushes branches, creates PRs, updates labels
+    ┌─── The Tick ────────────────────────────────────────┐
+    │                                                      │
+    │  1. Finalize:  ready-for-review → push + PR          │
+    │  2. Reviews:   pr-created + pr-review.md → review    │
+    │  3. Approve:   review-ready → approved (policy)      │
+    │  4. Merge:     approved → merged (close-task.sh)     │
+    │  5. Health:    check workers (warn/kill stuck)        │
+    │  6. Spawn:     loop until at capacity or no tasks    │
+    │     ┌─────────────┐  ┌─────────────┐  ┌──────────┐  │
+    │     │ git worktree │  │ git worktree │  │   ...    │  │
+    │     │  (tmux win)  │  │  (tmux win)  │  │          │  │
+    │     │ Claude Code  │  │ Claude Code  │  │          │  │
+    │     └──────────────┘  └──────────────┘  └──────────┘  │
+    │  7. Summary:   notify cycle results                  │
+    │                                                      │
+    └──────────────────────────────────────────────────────┘
+        ↓ (if --loop: sleep interval, repeat)
 ```
 
 ## Layer Architecture
@@ -86,12 +85,13 @@ File-based coordination. No database, no API, no IPC.
 
 | Script | Purpose |
 |--------|---------|
+| `conductor.sh` | The single orchestration engine (tick-based, all modes) |
 | `spawn-worker.sh` | Launch Claude Code in tmux with a dynamically built prompt |
 | `check-workers.sh` | JSON output of active workers and their health |
 | `update-status.sh` | Safe jq-based status.json mutations |
 | `notify.sh` | Webhook notifications on status transitions |
-| `orchestrate-parallel.sh` | Wave-based parallel execution with git worktrees |
 | `lib/config.sh` | Shared config reader for `.claude/agentsquad.json` |
+| `lib/worktree.sh` | Git worktree create/cleanup for parallel isolation |
 
 ### Layer 5: Commands (Slash Commands)
 
@@ -150,45 +150,46 @@ Every hook, every timing constant (8-second sleep), every banned phrase in the c
 ## Data Flow: Orchestration Run
 
 ```
-1. /orchestrate
-   ├─ Fetch issues via `gh issue list`
+1. /orchestrate (triage only)
+   ├─ Fetch issues via `gh issue list --label squad:ready`
    ├─ Parse depends-on: #N from bodies
    ├─ Topological sort (detect cycles)
-   ├─ Write .tasks/orchestration-manifest.json
-   └─ Output: "Run orchestrate-parallel.sh"
+   ├─ Create .tasks/<task-id>/ directories with status.json
+   ├─ Apply squad:queued labels
+   └─ Call conductor.sh --once
 
-2. orchestrate-parallel.sh
-   ├─ Read manifest
-   ├─ Reset any in_progress → queued (crash recovery)
-   ├─ Acquire PID lock
+2. conductor.sh (the single engine)
+   ├─ Acquire flock tick lock (one tick at a time)
    │
-   ├─ LOOP: compute_next_wave()
-   │   ├─ Find queued tasks with all deps met
-   │   ├─ Skip tasks with failed deps
-   │   └─ Return wave (issue numbers)
+   ├─ Step 1: cmd_finalize_all
+   │   └─ ready-for-review → push branch, create PR → pr-created
    │
-   ├─ For each issue in wave (up to MAX_PARALLEL):
-   │   ├─ create_worktree() → .tasks/worktrees/issue-N/
-   │   │   ├─ git worktree add from main branch
-   │   │   └─ merge dependency branches (if any)
+   ├─ Step 2: cmd_check_reviews
+   │   └─ pr-created + pr-review.md exists → review-ready
+   │
+   ├─ Step 3: cmd_approve_ready
+   │   └─ review-ready → approved (per approval policy)
+   │
+   ├─ Step 4: cmd_merge_approved
+   │   └─ approved → merged (via close-task.sh or gh pr merge)
+   │
+   ├─ Step 5: cmd_health
+   │   └─ Check active workers: OK / WARNING / STUCK (kill)
+   │
+   ├─ Step 6: cmd_spawn_all (loops until at capacity)
+   │   ├─ Find next ready task with deps met
+   │   ├─ create_worktree() → .tasks/worktrees/<task-id>/
    │   ├─ spawn-worker.sh (in worktree, via tmux)
-   │   │   ├─ Build .worker-prompt.md (inject AC, commands, env)
-   │   │   ├─ tmux new-window with Claude Code
-   │   │   └─ /loop-start with compliance enforcement
-   │   └─ wait for worker completion
+   │   └─ Repeat until MAX_WORKERS or no ready tasks
    │
-   ├─ After wave completes:
-   │   ├─ Push branches from worktrees
-   │   ├─ Create PRs via gh
-   │   ├─ Update labels (squad:complete / squad:failed)
-   │   └─ Cleanup worktrees
+   ├─ Step 7: cmd_cycle_summary → notification
    │
-   └─ Release PID lock, write final summary
+   └─ Release flock, exit (or sleep + repeat if --loop)
 
-3. manifest.json tracks state throughout:
-   ├─ All writes serialized via flock
-   ├─ Atomic status + timestamp updates
-   └─ Resume from any interruption point
+3. status.json tracks task state throughout:
+   ├─ All updates via update-status.sh (jq-based)
+   ├─ Dependency checks prevent premature spawning
+   └─ Cascade blocking: failed dep → block dependent tasks
 ```
 
 ## Configuration

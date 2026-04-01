@@ -2,6 +2,33 @@
 
 All notable changes to AgentSquad are documented here. This changelog also serves as a design journal — recording not just what changed, but why, what alternatives were considered, and what was learned.
 
+## [0.4.0] — 2026-04-01 — Unified Conductor
+
+### What's new
+The Conductor is now the **single orchestration engine**. The previous two-path system (batch `orchestrate-parallel.sh` + continuous `conductor.sh`) shared 80% of logic but caused bugs to be found twice. Now there is one engine with multiple run modes.
+
+### Run modes
+- `conductor.sh --once` — single tick (default)
+- `conductor.sh --loop 3m` — continuous tick every N minutes/seconds
+- `conductor.sh --dry-run` — preview what would happen, no changes
+- `conductor.sh status` — JSON summary
+- `conductor.sh finalize <id>` — finalize specific task
+- `conductor.sh health` — health check all workers
+
+### Key changes
+- **`cmd_spawn_all`** replaces `cmd_spawn_next`. Loops until at capacity (MAX_WORKERS) or no ready tasks with deps met, instead of spawning one task per invocation.
+- **`flock`-based tick locking** prevents concurrent ticks. Safe for overlapping `/loop` and manual invocations.
+- **Dry-run mode** — every `cmd_*` function checks `$DRY_RUN` and logs what it would do.
+- **`/orchestrate` is now triage-only** — fetches issues, parses dependencies, creates task dirs, then calls `conductor.sh --once`.
+
+### Deleted
+- `core/scripts/orchestrate-parallel.sh` — replaced entirely by the unified Conductor.
+
+### Designed with Codex (gpt-5.4)
+Both models agreed: one idempotent tick with multiple triggers beats maintaining two parallel codepaths. After 4 E2E test runs and 3 Codex reviews, this was the clear path.
+
+---
+
 ## [0.3.0] — 2026-04-01 — Notifications + Dual-Mode Approval
 
 ### What's new

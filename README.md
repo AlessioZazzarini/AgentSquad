@@ -63,19 +63,28 @@ The loop framework injects a **7-point anti-premature-stopping checklist** every
 
 Workers cannot stop until all 7 points are satisfied. Push and PR creation happen after worker completion (handled by the orchestrator).
 
-### Continuous Orchestration (Conductor)
+### Orchestration (The Conductor)
 
-The Conductor watches your task queue and autonomously manages workers:
+The Conductor is AgentSquad's single orchestration engine. One idempotent tick handles the full lifecycle:
 
 ```bash
-# Run one cycle manually
-/conductor
+# Single tick (default)
+bash scripts/agentsquad/conductor.sh --once
 
-# Run continuously (every 5 minutes)
-/loop 5m /conductor
+# Continuous mode (tick every 3 minutes)
+bash scripts/agentsquad/conductor.sh --loop 3m
+
+# Dry-run (preview, no changes)
+bash scripts/agentsquad/conductor.sh --dry-run
+
+# From Claude Code
+/conductor                  # single tick
+/loop 5m /conductor         # continuous
 ```
 
-Each cycle: finalizes completed workers (push + PR), checks review artifacts, applies approval policy, merges approved tasks, checks health (nudge/kill stuck), spawns new workers (up to MAX_WORKERS). See [docs/conductor.md](docs/conductor.md).
+Each tick: finalizes completed workers (push + PR), checks review artifacts, applies approval policy, merges approved tasks, health checks (warn/kill stuck workers), spawns new workers until at capacity (MAX_WORKERS). See [docs/conductor.md](docs/conductor.md).
+
+To triage GitHub issues into the task queue, use `/orchestrate` — it fetches issues, parses dependencies, creates task directories, then hands off to the Conductor.
 
 ### Approval Modes
 
