@@ -78,6 +78,7 @@ gh label create "squad:queued" --color "FBCA04" --description "In the AgentSquad
 gh label create "squad:in-progress" --color "1D76DB" --description "Currently being processed by AgentSquad" --force
 gh label create "squad:complete" --color "6F42C1" --description "Successfully processed by AgentSquad" --force
 gh label create "squad:failed" --color "D93F0B" --description "AgentSquad processing failed" --force
+gh label create "squad:triage" --color "C5DEF5" --description "Discovered by worker, needs human triage" --force
 ```
 
 **If `--init` flag was provided**, stop here after creating labels.

@@ -151,6 +151,28 @@ Rules:
 
 ---
 
+## GitHub Integration
+
+**Progress comments** — post to your GitHub issue at these milestones ONLY:
+\`\`\`bash
+bash scripts/agentsquad/gh-comment.sh ${ISSUE_NUMBER:-none} "🔍 Investigating: [1-line summary of what you found]"
+bash scripts/agentsquad/gh-comment.sh ${ISSUE_NUMBER:-none} "🔨 Implementing: [1-line summary of your approach]"
+bash scripts/agentsquad/gh-comment.sh ${ISSUE_NUMBER:-none} "✅ Tests passing: X/X. Finalizing."
+\`\`\`
+Max 3-4 comments per task. Do NOT comment on every file read or command.
+
+**Follow-up issues** — if you discover a bug or missing feature while working:
+\`\`\`bash
+bash scripts/agentsquad/gh-create-followup.sh ${ISSUE_NUMBER:-none} "bug: [short title]" "[description with repro steps]"
+\`\`\`
+Rules for follow-ups:
+- Max 2 follow-up issues per task
+- NEVER fix the follow-up inline — stay focused on YOUR acceptance criteria
+- If the issue BLOCKS your current task, mark yourself blocked instead of branching
+- If gh commands fail, continue working — GitHub comments are nice-to-have, not blocking
+
+---
+
 ## Operational Rules
 
 1. **Status updates:** ONLY via \`bash scripts/agentsquad/update-status.sh ${TASK_ID} <field> <value>\` — NEVER edit status.json directly
