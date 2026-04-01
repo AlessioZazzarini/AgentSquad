@@ -39,13 +39,25 @@ create_worktree() {
 
   # Clean up stale worktree if it exists
   if [[ -d "$wt_path" ]]; then
+    # Check if there's an active tmux window using this worktree
+    local session="${AGENTSQUAD_TMUX_SESSION:-$(basename "$(pwd)")}"
+    local window_name="task-${task_id}"
+    if tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | grep -q "^${window_name}$"; then
+      echo "WARNING: Worktree $wt_path has active worker — skipping recreation" >&2
+      echo "$wt_path"
+      return 0
+    fi
     git worktree remove "$wt_path" --force 2>/dev/null || rm -rf "$wt_path"
   fi
 
   mkdir -p "$(dirname "$wt_path")"
 
-  # Create branch from main
-  git branch -D "$branch" 2>/dev/null || true
+  # Only delete branch if it has no unpushed commits
+  local unpushed
+  unpushed=$(git log --oneline "$branch" --not --remotes 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$unpushed" -eq 0 ] 2>/dev/null; then
+    git branch -D "$branch" 2>/dev/null || true
+  fi
   git worktree add "$wt_path" -b "$branch" "$MAIN_BRANCH" 2>/dev/null || {
     # Branch might exist remotely
     git worktree add "$wt_path" "$branch" 2>/dev/null || {

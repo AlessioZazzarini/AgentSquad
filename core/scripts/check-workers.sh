@@ -52,8 +52,11 @@ for WINDOW in $(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null)
       fi
     fi
 
-    if [ "$FIRST" = true ]; then FIRST=false; else echo ","; fi
-    echo "  {\"window\": \"${WINDOW}\", \"task_id\": \"${TASK_ID}\", \"alive\": $([ \"$DEAD\" = \"0\" ] && echo true || echo false), \"age_seconds\": ${AGE_SECONDS}}"
+    # Only include alive workers (dead panes should not consume capacity)
+    if [ "$DEAD" = "0" ]; then
+      if [ "$FIRST" = true ]; then FIRST=false; else echo ","; fi
+      echo "  {\"window\": \"${WINDOW}\", \"task_id\": \"${TASK_ID}\", \"alive\": true, \"age_seconds\": ${AGE_SECONDS}}"
+    fi
   fi
 done
 echo "]"

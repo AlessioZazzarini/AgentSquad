@@ -257,6 +257,13 @@ Update \`${TASKS_DIR}/${TASK_ID}/execution-log.md\` after EACH step — not just
 - Final summary
 PROMPT_EOF
 
+# Copy prompt to worktree if using separate workdir (worktree won't have canonical .tasks/)
+if [ -n "${AGENTSQUAD_WORKDIR:-}" ] && [ "$AGENTSQUAD_WORKDIR" != "$PROJECT_ROOT" ]; then
+  WORKTREE_TASK_DIR="${AGENTSQUAD_WORKDIR}/${TASKS_DIR}/${TASK_ID}"
+  mkdir -p "$WORKTREE_TASK_DIR"
+  cp "$PROMPT_FILE" "$WORKTREE_TASK_DIR/.worker-prompt.md"
+fi
+
 echo "Built prompt: ${PROMPT_FILE}" >&2
 
 # --- tmux: spawn Claude Code + send loop command ---

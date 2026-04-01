@@ -45,7 +45,7 @@ if [ -z "$PR_NUMBER" ]; then
 fi
 
 # --- Derive issue from PR body (looks for "Fixes #X") ---
-ISSUE_NUMBER=$(gh pr view "$PR_NUMBER" --json body -q '.body' 2>/dev/null | grep -o 'Fixes #[0-9]*' | grep -o '[0-9]*' || echo "")
+ISSUE_NUMBER=$(gh pr view "$PR_NUMBER" --json body -q '.body' 2>/dev/null | grep -oiE '(Fixes|Closes|Resolves) #[0-9]+' | grep -o '[0-9]*' || echo "")
 
 echo "=== Closing task: ${TASK_ID} ==="
 echo "  Branch: ${BRANCH}"

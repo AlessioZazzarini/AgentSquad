@@ -485,13 +485,22 @@ cmd_approve_ready() {
           continue
         fi
 
-        # Check CI status
-        local ci_ok=true
-        if ! (cd "$PROJECT_ROOT" && gh pr checks "$pr_number" --required 2>&1 | grep -q "pass\|All checks were successful") 2>/dev/null; then
-          local checks_output
-          checks_output=$(cd "$PROJECT_ROOT" && gh pr checks "$pr_number" --required 2>&1 || true)
+        # Check CI status — default to false, only approve on explicit pass
+        local ci_ok=false
+        local checks_output
+        checks_output=$(cd "$PROJECT_ROOT" && gh pr checks "$pr_number" --required 2>&1 || true)
+        local has_results=false
+        local has_failures=false
+        if [ -n "$checks_output" ] && ! echo "$checks_output" | grep -qi "no required checks"; then
+          has_results=true
           if echo "$checks_output" | grep -qi "fail\|error"; then
-            ci_ok=false
+            has_failures=true
+          fi
+        fi
+        # Only set true if we got results AND none failed
+        if [ "$has_results" = true ] && [ "$has_failures" = false ]; then
+          if echo "$checks_output" | grep -qi "pass\|All checks were successful"; then
+            ci_ok=true
           fi
         fi
 
@@ -646,7 +655,7 @@ cmd_spawn_all() {
     fi
     # Count active workers
     local active
-    active=$(bash "$SCRIPT_DIR/check-workers.sh" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)
+    active=$(bash "$SCRIPT_DIR/check-workers.sh" 2>/dev/null | jq '[.[] | select(.alive == true)] | length' 2>/dev/null || echo 0)
 
     if [ "$active" -ge "$MAX_WORKERS" ]; then
       log "At capacity ($active/$MAX_WORKERS workers)"

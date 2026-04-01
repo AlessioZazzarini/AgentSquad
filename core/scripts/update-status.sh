@@ -36,10 +36,13 @@ fi
 LOCK_DIR="${STATUS_FILE}.lock.d"
 cleanup_lock() { rm -rf "$LOCK_DIR" 2>/dev/null; }
 trap cleanup_lock EXIT
-# Acquire lock with retry
+# Acquire lock with retry — must not proceed without lock
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   sleep 0.2
-  mkdir "$LOCK_DIR" 2>/dev/null || true  # proceed anyway if still locked
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "ERROR: Could not acquire lock for ${TASK_ID} — concurrent update in progress" >&2
+    exit 1
+  fi
 fi
 
 # Determine if value is numeric, boolean, or string
