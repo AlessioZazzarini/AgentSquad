@@ -2,6 +2,28 @@
 
 All notable changes to AgentSquad are documented here. This changelog also serves as a design journal — recording not just what changed, but why, what alternatives were considered, and what was learned.
 
+## [0.2.0] — 2026-04-01 — Conductor (Continuous Orchestrator)
+
+### What's new
+The Conductor is a continuous orchestrator that watches the task queue and autonomously manages workers. Instead of batch processing all issues at once, it runs one cycle every 5 minutes.
+
+### Execution strategies
+Three strategies were evaluated with Codex (gpt-5.4):
+- **tmux + /loop** (shipped) — fast, subscription-based, runs locally
+- **GitHub Actions** (shipped, triage-only) — serverless, can't spawn local workers
+- **Local daemon** (designed, not shipped) — launchd/systemd, future v0.3
+
+### New files
+- `core/commands/conductor.md` — `/conductor` slash command
+- `core/scripts/conductor.sh` — bash helper (status/finalize/health/spawn-next)
+- `packs/github/workflows/conductor-triage.yml` — GH Actions template
+- `docs/conductor.md` — setup guide for all 3 strategies
+
+### Key design decision
+Workers stop at `ready-for-review`. The Conductor handles push + PR creation. This keeps workers simple (code only) and centralizes git/GitHub operations.
+
+---
+
 ## [0.1.2] — 2026-04-01 — Post-E2E Fixes
 
 ### What happened

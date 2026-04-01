@@ -63,6 +63,20 @@ The loop framework injects a **7-point anti-premature-stopping checklist** every
 
 Workers cannot stop until all 7 points are satisfied. Push and PR creation happen after worker completion (handled by the orchestrator).
 
+### Continuous Orchestration (Conductor)
+
+The Conductor watches your task queue and autonomously manages workers:
+
+```bash
+# Run one cycle manually
+/conductor
+
+# Run continuously (every 5 minutes)
+/loop 5m /conductor
+```
+
+Each cycle: finalizes completed workers (push + PR), checks health (nudge/kill stuck), spawns new workers (up to MAX_WORKERS). See [docs/conductor.md](docs/conductor.md).
+
 ### Multi-Agent Teams
 
 For complex tasks spanning multiple domains, spawn specialist agents:

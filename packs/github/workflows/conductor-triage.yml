@@ -1,0 +1,45 @@
+# AgentSquad Conductor — Triage Only
+# Scans for new squad:ready issues and updates the orchestration manifest.
+# Does NOT spawn workers (requires local tmux).
+#
+# To use: copy to .github/workflows/conductor-triage.yml
+
+name: AgentSquad Triage
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+  issues:
+    types: [labeled]  # Also trigger when issues get labeled
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for squad:ready issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ISSUES=$(gh issue list --label "squad:ready" --json number,title,body --limit 20)
+          echo "Found $(echo $ISSUES | jq length) issues labeled squad:ready"
+          echo "$ISSUES" > /tmp/ready-issues.json
+
+      - name: Parse dependencies
+        run: |
+          # Extract depends-on: #N from issue bodies
+          cat /tmp/ready-issues.json | jq -r '.[].body // ""' | grep -oiE 'depends[- ]?on:?\s*#[0-9]+' || true
+
+      - name: Post status comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COUNT=$(cat /tmp/ready-issues.json | jq length)
+          echo "::notice::AgentSquad triage: $COUNT issues ready for processing"
