@@ -430,14 +430,19 @@ function detectProject() {
   const name = path.basename(CWD);
   // Node.js
   if (fs.existsSync(path.join(CWD, 'package.json'))) {
-    const pkg = JSON.parse(fs.readFileSync(path.join(CWD, 'package.json'), 'utf8'));
-    return {
-      name: pkg.name || name,
-      build: pkg.scripts?.build ? 'npm run build' : 'echo "no build"',
-      test: pkg.scripts?.test ? 'npm test' : 'echo "no tests"',
-      lint: pkg.scripts?.lint ? 'npm run lint' : '',
-      description: pkg.description || '',
-    };
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(CWD, 'package.json'), 'utf8'));
+      return {
+        name: pkg.name || name,
+        build: pkg.scripts?.build ? 'npm run build' : 'echo "no build"',
+        test: pkg.scripts?.test ? 'npm test' : 'echo "no tests"',
+        lint: pkg.scripts?.lint ? 'npm run lint' : '',
+        description: pkg.description || '',
+      };
+    } catch {
+      // Malformed package.json — use name-only fallback
+      return { name, build: 'npm run build', test: 'npm test', lint: '', description: '' };
+    }
   }
   // Python
   if (fs.existsSync(path.join(CWD, 'requirements.txt')) || fs.existsSync(path.join(CWD, 'pyproject.toml'))) {
@@ -459,16 +464,25 @@ function loadEnvFile() {
   const envPath = path.join(CWD, '.env.local');
   if (!fs.existsSync(envPath)) return;
   const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-  for (const line of lines) {
-    const match = line.match(/^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|SLACK_WEBHOOK_URL|AGENTSQUAD_\w+)=(.+)/);
+  for (let line of lines) {
+    line = line.trim();
+    if (!line || line.startsWith('#')) continue;
+    // Strip 'export ' prefix
+    if (line.startsWith('export ')) line = line.slice(7);
+    const match = line.match(/^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|SLACK_WEBHOOK_URL|AGENTSQUAD_\w+)\s*=\s*(.+)/);
     if (match && !process.env[match[1]]) {
-      process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
+      let value = match[2].trim();
+      // Strip quotes
+      value = value.replace(/^["']|["']$/g, '');
+      // Strip inline comment (only if not inside quotes)
+      value = value.replace(/\s+#.*$/, '');
+      process.env[match[1]] = value;
     }
   }
 }
 
 function ensureGitHubLabels() {
-  if (!commandExists('gh')) return;
+  if (!commandExists('gh')) { print('  gh CLI not found — skipping label creation'); return; }
   const labels = [
     { name: 'squad:ready', color: '0E8A16', desc: 'Ready for AgentSquad' },
     { name: 'squad:queued', color: 'FBCA04', desc: 'In queue' },
@@ -477,12 +491,15 @@ function ensureGitHubLabels() {
     { name: 'squad:failed', color: 'D93F0B', desc: 'Failed' },
     { name: 'squad:triage', color: 'C5DEF5', desc: 'Needs triage' },
   ];
+  let created = 0;
   for (const l of labels) {
     try {
       execSync(`gh label create "${l.name}" --color "${l.color}" --description "${l.desc}" --force`, { stdio: 'pipe', cwd: CWD });
+      created++;
     } catch { /* ignore — maybe no repo access */ }
   }
-  print('  GitHub labels ensured');
+  if (created > 0) print(`  GitHub labels ensured (${created} labels)`);
+  else print('  GitHub labels: could not create (check gh auth)');
 }
 
 function syncGitHubIssues() {
@@ -497,9 +514,11 @@ function syncGitHubIssues() {
       if (fs.existsSync(path.join(taskDir, 'status.json'))) continue; // already exists
       fs.mkdirSync(taskDir, { recursive: true });
       // Parse dependencies from body
+      // Store as "issue-<number>" to match task directory names, since
+      // conductor.sh checks .tasks/$dep/status.json for each dependency
       const deps = [];
       const depMatches = (issue.body || '').matchAll(/depends[- ]?on:?\s*#(\d+)/gi);
-      for (const m of depMatches) deps.push(parseInt(m[1]));
+      for (const m of depMatches) deps.push(`issue-${m[1]}`);
       // Detect complexity from body
       let complexity = 'medium';
       const compMatch = (issue.body || '').match(/\*\*Complexity:\s*(\w+)\*\*/i);
@@ -539,17 +558,17 @@ function startConductor() {
     process.exit(1);
   }
 
-  // Check if already running
-  const lockDir = path.join(CWD, '.tasks', '.conductor.lock.d');
-  if (fs.existsSync(lockDir)) {
-    const pidFile = path.join(lockDir, 'pid');
-    if (fs.existsSync(pidFile)) {
-      const pid = fs.readFileSync(pidFile, 'utf8').trim();
-      try {
-        process.kill(parseInt(pid), 0); // check if alive
-        print(`  Conductor already running (PID ${pid})`);
-        return;
-      } catch { /* stale lock */ }
+  // Check if already running via persistent pid file (not the transient tick lock)
+  const pidFile = path.join(CWD, '.tasks', '.conductor.pid');
+  if (fs.existsSync(pidFile)) {
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+    try {
+      process.kill(pid, 0);
+      print(`  Conductor already running (PID ${pid})`);
+      return;
+    } catch {
+      // Stale pid file — process died
+      fs.unlinkSync(pidFile);
     }
   }
 
@@ -568,6 +587,9 @@ function startConductor() {
   });
   conductor.unref();
 
+  // Write pid file for daemon tracking (separate from tick lock)
+  fs.writeFileSync(pidFile, String(conductor.pid));
+
   print(`  Conductor started (PID ${conductor.pid})`);
   print('');
   print('  Commands:');
@@ -584,6 +606,11 @@ async function cmdStart() {
 
   // 1. Auto-detect project type if no agentsquad.json exists
   if (!fs.existsSync(path.join(CWD, '.claude', 'agentsquad.json'))) {
+    // Check if .claude/ has existing custom setup
+    const hasExistingSetup = fs.existsSync(path.join(CWD, '.claude', 'settings.json'));
+    if (hasExistingSetup) {
+      print('  Existing .claude/ setup detected — installing AgentSquad alongside it');
+    }
     print('  No agentsquad.json found — auto-detecting project...');
     const detected = detectProject();
     print(`  Detected: ${detected.name} (build: ${detected.build}, test: ${detected.test})`);
@@ -631,22 +658,22 @@ function cmdStatus() {
 }
 
 function cmdStop() {
-  const lockDir = path.join(CWD, '.tasks', '.conductor.lock.d');
-  if (fs.existsSync(lockDir)) {
-    const pidFile = path.join(lockDir, 'pid');
-    if (fs.existsSync(pidFile)) {
-      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-      try {
-        process.kill(pid, 'SIGTERM');
-        print(`  Conductor stopped (PID ${pid})`);
-      } catch {
-        print('  Conductor process not found (stale lock)');
-      }
+  const pidFile = path.join(CWD, '.tasks', '.conductor.pid');
+  if (fs.existsSync(pidFile)) {
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+    try {
+      process.kill(pid, 'SIGTERM');
+      print(`  Conductor stopped (PID ${pid})`);
+    } catch {
+      print('  Conductor process not found (stale pid)');
     }
-    try { fs.rmSync(lockDir, { recursive: true }); } catch {}
+    try { fs.unlinkSync(pidFile); } catch {}
   } else {
     print('  No conductor running');
   }
+  // Also clean up transient tick lock if present
+  const lockDir = path.join(CWD, '.tasks', '.conductor.lock.d');
+  try { fs.rmSync(lockDir, { recursive: true }); } catch {}
 }
 
 function cmdVersion() {
