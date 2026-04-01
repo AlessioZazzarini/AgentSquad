@@ -633,7 +633,7 @@ cmd_spawn_all() {
   local spawned=0
   local -a failed_tasks=()
   local spawn_attempts=0
-  local MAX_SPAWN_ATTEMPTS=3
+  local MAX_SPAWN_ATTEMPTS=$((MAX_WORKERS + 2))  # allow headroom for failures
 
   while true; do
     spawn_attempts=$((spawn_attempts + 1))
