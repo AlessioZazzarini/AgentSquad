@@ -28,7 +28,11 @@ if ! command -v gh &>/dev/null; then
   exit 0
 fi
 
-# Post comment (fail silently)
-if ! gh issue comment "$ISSUE" --body "$MSG" 2>/dev/null; then
+# Resolve project root (worktree-safe: gh needs to find the repo)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${AGENTSQUAD_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+
+# Post comment from project root (fail silently)
+if ! (cd "$PROJECT_ROOT" && gh issue comment "$ISSUE" --body "$MSG") 2>/dev/null; then
   echo "[gh-comment] Failed to post to #$ISSUE — continuing" >&2
 fi
