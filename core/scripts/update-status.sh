@@ -27,6 +27,19 @@ fi
 
 STATUS_FILE="$PROJECT_ROOT/${TASKS_DIR}/${TASK_ID}/status.json"
 
+# Fallback: if status file not found at primary path (worktree scenario),
+# try resolving via git's canonical worktree root
+if [ ! -f "$STATUS_FILE" ]; then
+  CANONICAL_ROOT=$(cd "$PROJECT_ROOT" && git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')
+  if [ -n "$CANONICAL_ROOT" ] && [ "$CANONICAL_ROOT" != "$PROJECT_ROOT" ]; then
+    ALT_STATUS_FILE="$CANONICAL_ROOT/${TASKS_DIR}/${TASK_ID}/status.json"
+    if [ -f "$ALT_STATUS_FILE" ]; then
+      PROJECT_ROOT="$CANONICAL_ROOT"
+      STATUS_FILE="$ALT_STATUS_FILE"
+    fi
+  fi
+fi
+
 if [ ! -f "$STATUS_FILE" ]; then
   echo "ERROR: ${STATUS_FILE} not found" >&2
   exit 1

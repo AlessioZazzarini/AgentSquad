@@ -17,7 +17,8 @@
 #   4. Merge approved tasks
 #   5. Health check active workers
 #   6. Spawn workers until at capacity or no ready tasks
-#   7. Send cycle summary notification
+#   7. Clean up merged task directories and stale worktrees
+#   8. Send cycle summary notification
 
 set -euo pipefail
 
@@ -344,8 +345,21 @@ cmd_finalize() {
     bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "pr-created"
     bash "$SCRIPT_DIR/update-status.sh" "$task_id" pr_url "$pr_url"
   else
-    echo "ERROR: No valid PR URL obtained for $task_id (got: ${pr_url:-empty})" >&2
-    return 1
+    # Check if the branch has no diff vs main (code was committed directly)
+    local diff_output
+    if diff_output=$(cd "$PROJECT_ROOT" && git diff --name-only "$MAIN_BRANCH...$branch" 2>&1); then
+      local diff_count
+      diff_count=$(echo "$diff_output" | grep -c . || true)
+      if [ "$diff_count" -eq 0 ]; then
+        echo "INFO: Branch $branch has no diff vs $MAIN_BRANCH — task likely merged directly. Marking as merged." >&2
+        bash "$SCRIPT_DIR/update-status.sh" "$task_id" status "merged"
+      else
+        echo "WARNING: No valid PR URL obtained for $task_id (got: ${pr_url:-empty}) — skipping finalization" >&2
+      fi
+    else
+      echo "WARNING: git diff failed for $task_id branch $branch (branch may not exist) — skipping finalization" >&2
+    fi
+    return 0
   fi
 
   # Update GitHub labels
@@ -383,7 +397,9 @@ cmd_finalize_all() {
       continue
     fi
 
-    cmd_finalize "$task_id"
+    cmd_finalize "$task_id" || {
+      echo "WARNING: Finalization failed for $task_id — continuing with next task" >&2
+    }
     found=$((found + 1))
   done
 
@@ -615,16 +631,35 @@ cmd_health() {
     local updated_at
     updated_at=$(jq -r '.updated_at // empty' "$status_file")
 
+    # Use updated_at if available, fall back to created_at
+    local created_at
+    created_at=$(jq -r '.created_at // empty' "$status_file")
+    local effective_ts="${updated_at:-$created_at}"
+
     local age=0
-    if [ -n "$updated_at" ]; then
-      local updated_epoch
-      updated_epoch=$(parse_epoch "$updated_at")
+    local updated_epoch=0
+    if [ -n "$effective_ts" ]; then
+      updated_epoch=$(parse_epoch "$effective_ts")
       if [ "$updated_epoch" -gt 0 ] 2>/dev/null; then
         age=$((now - updated_epoch))
       fi
     fi
 
     local age_min=$((age / 60))
+
+    # Grace period: if task was created less than 5 minutes ago, don't flag as stuck
+    if [ -n "$created_at" ]; then
+      local created_epoch
+      created_epoch=$(parse_epoch "$created_at")
+      if [ "$created_epoch" -gt 0 ] 2>/dev/null; then
+        local time_since_create=$((now - created_epoch))
+        if [ "$time_since_create" -lt 300 ]; then
+          echo "OK: $task_id (${age_min}m since update, status=$status) [grace period]"
+          found=$((found + 1))
+          continue
+        fi
+      fi
+    fi
 
     if [ "$age" -gt 2700 ]; then  # 45 min
       echo "STUCK: $task_id (${age_min}m since update, status=$status)"
@@ -644,13 +679,23 @@ cmd_health() {
 cmd_spawn_all() {
   local spawned=0
   local -a failed_tasks=()
+  local -a attempted_tasks=()
   local spawn_attempts=0
-  local MAX_SPAWN_ATTEMPTS=$((MAX_WORKERS + 2))  # allow headroom for failures
+
+  # Count total ready tasks to cap attempts (prevents infinite loop)
+  local total_ready=0
+  for sf in "$PROJECT_ROOT/$TASKS_DIR"/*/status.json; do
+    [ -f "$sf" ] || continue
+    local s
+    s=$(jq -r '.status // "unknown"' "$sf")
+    [ "$s" = "ready" ] && total_ready=$((total_ready + 1))
+  done
+  local MAX_SPAWN_ATTEMPTS=$((total_ready + 2))
 
   while true; do
     spawn_attempts=$((spawn_attempts + 1))
     if [ "$spawn_attempts" -gt "$MAX_SPAWN_ATTEMPTS" ]; then
-      log "Reached max spawn attempts ($MAX_SPAWN_ATTEMPTS) this tick — stopping"
+      log "All ready tasks attempted ($spawn_attempts attempts) — stopping"
       break
     fi
     # Count active workers
@@ -789,6 +834,57 @@ EOF
   fi
 }
 
+cmd_cleanup_merged() {
+  local cleaned=0
+  local completed_dir="$PROJECT_ROOT/$TASKS_DIR/_completed"
+
+  for status_file in "$PROJECT_ROOT/$TASKS_DIR"/*/status.json; do
+    [ -f "$status_file" ] || continue
+    local status
+    status=$(jq -r '.status // "unknown"' "$status_file")
+    [ "$status" = "merged" ] || continue
+
+    local task_id
+    task_id=$(basename "$(dirname "$status_file")")
+    [[ "$task_id" == _* ]] && continue
+
+    local task_dir="$PROJECT_ROOT/$TASKS_DIR/$task_id"
+
+    if [ "$DRY_RUN" = true ]; then
+      log "[DRY-RUN] Would archive $task_id to _completed/"
+      cleaned=$((cleaned + 1))
+      continue
+    fi
+
+    # Remove worktree if it still exists
+    local wt_path="$PROJECT_ROOT/$TASKS_DIR/worktrees/$task_id"
+    if [ -d "$wt_path" ]; then
+      (cd "$PROJECT_ROOT" && git worktree remove "$wt_path" --force 2>/dev/null) || rm -rf "$wt_path"
+    fi
+
+    # Archive task directory (overwrite if already archived from a previous tick)
+    mkdir -p "$completed_dir"
+    if [ -d "$completed_dir/$task_id" ]; then
+      rm -rf "$completed_dir/$task_id"
+    fi
+    mv "$task_dir" "$completed_dir/$task_id" 2>/dev/null || {
+      echo "WARNING: Failed to archive $task_id" >&2
+      continue
+    }
+    echo "Archived: $task_id"
+    cleaned=$((cleaned + 1))
+  done
+
+  # Clean up empty worktrees directory
+  if [ -d "$PROJECT_ROOT/$TASKS_DIR/worktrees" ]; then
+    rmdir "$PROJECT_ROOT/$TASKS_DIR/worktrees" 2>/dev/null || true
+  fi
+
+  if [ "$cleaned" -gt 0 ]; then
+    echo "Cleaned up $cleaned merged task(s)."
+  fi
+}
+
 # ── The tick ─────────────────────────────────────────────────
 run_tick() {
   log "=== Conductor tick started ==="
@@ -828,7 +924,10 @@ run_tick() {
   log "--- Step 6: Spawn workers ---"
   cmd_spawn_all
 
-  log "--- Step 7: Cycle summary ---"
+  log "--- Step 7: Cleanup merged tasks ---"
+  cmd_cleanup_merged
+
+  log "--- Step 8: Cycle summary ---"
   cmd_cycle_summary
 
   log "=== Conductor tick completed ==="

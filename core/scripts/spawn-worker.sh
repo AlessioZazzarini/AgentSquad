@@ -278,14 +278,74 @@ if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^$
   exit 0
 fi
 
+# Log file for capturing crash output
+WORKER_LOG="/tmp/agentsquad-worker-${TASK_ID}.log"
+
 # Must use claude-opus-4-6 — Sonnet runs out of context on complex tasks
 # AGENTSQUAD_PROJECT_ROOT ensures status updates write to canonical .tasks/
 # (not the worktree's local copy) when running in git worktree isolation
-tmux new-window -t "$SESSION" -n "$WINDOW_NAME" \
-  "cd ${WORK_DIR} && AGENTSQUAD_PROJECT_ROOT='${AGENTSQUAD_PROJECT_ROOT:-$PROJECT_ROOT}' AGENTSQUAD_LOOP_ENABLED=1 claude --model claude-opus-4-6 --dangerously-skip-permissions"
+#
+# Key design decisions for crash resilience:
+#   1. Run via bash -lc so the tmux window survives if claude exits
+#   2. Redirect stderr to a log file for post-mortem debugging
+#   3. sleep 120 after claude exits keeps the window alive for error capture
+#   4. Larger terminal size (-x 200 -y 50) avoids TUI init issues in 80x24
+tmux new-window -t "$SESSION" -n "$WINDOW_NAME" -x 200 -y 50 \
+  "bash -lc 'export AGENTSQUAD_PROJECT_ROOT=\"${AGENTSQUAD_PROJECT_ROOT:-$PROJECT_ROOT}\" AGENTSQUAD_LOOP_ENABLED=1; cd \"${WORK_DIR}\" && claude --model claude-opus-4-6 --dangerously-skip-permissions 2>>\"${WORKER_LOG}\"; echo \"[worker-exit] Claude exited with code \$? at \$(date)\" >> \"${WORKER_LOG}\"; sleep 120'"
 
-# Sleep 8 seconds after window creation (battle-tested: Claude Code needs time to initialize)
-sleep 8
+# --- Readiness polling (replaces fixed sleep 8) ---
+# Poll for up to 45s with exponential backoff. Claude Code needs time to
+# initialize its TUI, connect to the model, and probe MCP servers.
+# Under CPU load this can take 15-25s (was crashing at fixed 8s).
+MAX_WAIT=45
+WAIT_ELAPSED=0
+BACKOFF=3
+
+echo "Waiting for ${WINDOW_NAME} to become ready..." >&2
+while [ "$WAIT_ELAPSED" -lt "$MAX_WAIT" ]; do
+  sleep "$BACKOFF"
+  WAIT_ELAPSED=$((WAIT_ELAPSED + BACKOFF))
+
+  # Check window still exists (crash detection)
+  if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^${WINDOW_NAME}$"; then
+    echo "ERROR: Worker window ${WINDOW_NAME} died during startup. Check ${WORKER_LOG}" >&2
+    exit 1
+  fi
+
+  # Check that claude is actually running (not just the bash wrapper)
+  # If claude crashed, only bash remains — detect this and abort
+  PANE_PID=$(tmux list-panes -t "${SESSION}:${WINDOW_NAME}" -F '#{pane_pid}' 2>/dev/null | head -1)
+  if [ -z "$PANE_PID" ]; then
+    continue
+  fi
+
+  # Verify claude process is alive inside the pane (not just bash)
+  if ! pgrep -P "$PANE_PID" -f "claude" >/dev/null 2>&1; then
+    # Claude process not found — check if it already exited
+    if [ "$WAIT_ELAPSED" -gt 15 ]; then
+      echo "ERROR: Claude process not found in ${WINDOW_NAME} after ${WAIT_ELAPSED}s — likely crashed. Check ${WORKER_LOG}" >&2
+      exit 1
+    fi
+    continue
+  fi
+
+  # Check if Claude Code's TUI is initialized by looking for its specific prompt
+  # patterns. Avoid matching generic shell prompts ($, >) which would false-positive
+  # if claude crashed and bash wrapper is showing its prompt.
+  PANE_CONTENT=$(tmux capture-pane -t "${SESSION}:${WINDOW_NAME}" -p 2>/dev/null || true)
+  if echo "$PANE_CONTENT" | grep -qE '(❯|Claude|tips|/help|cost)'; then
+    echo "Worker ${WINDOW_NAME} ready after ${WAIT_ELAPSED}s" >&2
+    break
+  fi
+
+  # Exponential backoff: 3s, 5s, 7s, 9s, ...
+  BACKOFF=$((BACKOFF + 2))
+  if [ "$BACKOFF" -gt 10 ]; then BACKOFF=10; fi
+done
+
+if [ "$WAIT_ELAPSED" -ge "$MAX_WAIT" ]; then
+  echo "WARNING: Worker ${WINDOW_NAME} not confirmed ready after ${MAX_WAIT}s — sending command anyway" >&2
+fi
 
 # Send loop start command — reference the prompt file so worker reads full context
 tmux send-keys -t "${SESSION}:${WINDOW_NAME}" \
