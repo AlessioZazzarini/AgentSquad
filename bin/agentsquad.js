@@ -461,7 +461,11 @@ function detectProject() {
 }
 
 function loadEnvFile() {
-  const envPath = path.join(CWD, '.env.local');
+  // Check .env.local first, then .env (projects use different conventions)
+  let envPath = path.join(CWD, '.env.local');
+  if (!fs.existsSync(envPath)) {
+    envPath = path.join(CWD, '.env');
+  }
   if (!fs.existsSync(envPath)) return;
   const lines = fs.readFileSync(envPath, 'utf8').split('\n');
   for (let line of lines) {
